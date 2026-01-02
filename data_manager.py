@@ -34,6 +34,21 @@ class SatComDataManager:
             except Exception as e:
                 logging.error(f"Could not create output dir on HDD: {e}")
 
+    def get_sample_list(self):
+        """
+        Returns a list of path objects for all .iq files in the input directory.
+        Used by modulation_main.py to load the dataset.
+        """
+        if not self.input_dir.exists():
+            logging.warning(f"Input directory not found: {self.input_dir}")
+            return []
+            
+        files = list(self.input_dir.glob(f"*{self.extension}"))
+        if not files:
+            logging.warning(f"No {self.extension} files found in {self.input_dir}")
+            
+        return files
+
     def load_iq_sample(self, file_path):
         """
         Reads a binary .iq file.
