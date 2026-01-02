@@ -1,0 +1,22 @@
+{
+    "2_J_1.25_40_5.iq": {
+        "mod": 0,
+        "rolloff": 4,
+        "snr_measured": 9.82
+    },
+    "1_2_0.1_20_1.iq": {
+        "mod": 2,
+        "rolloff": 3,
+        "snr_measured": 9.8
+    },
+    "6_2_7.5_40_5.iq": {
+        "mod": 2,
+        "rolloff": 2,
+        "snr_measured": 9.79
+    },
+    "5_A_4.5_30_3.iq": {
+        "mod": 2,
+        "rolloff": 1,
+        "snr_measured": 9.8
+    }
+}
