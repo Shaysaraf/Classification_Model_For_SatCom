@@ -5,7 +5,13 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-# Configure logging to see what's happening on the remote terminal
+# --- IMPORT YOUR UTILS ---
+try:
+    from snr_utils import calculate_snr_raw
+except ImportError:
+    logging.error("CRITICAL: 'snr_utils.py' not found. Ensure it is in the same directory.")
+
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [DataManager] - %(levelname)s - %(message)s'
@@ -13,12 +19,14 @@ logging.basicConfig(
 
 class SatComDataManager:
     def __init__(self):
-        # --- HARDCODED PATHS AS REQUESTED ---
+        # --- PATHS ---
         self.input_dir = Path("/mnt/usb/iq_augmented_cut")
         self.output_dir = Path("/mnt/usb/amir_and_shay_results")
+        # Path to your master lookup table
+        self.master_json_path = Path("data_ready_SR.json") 
         self.extension = ".iq"
 
-        # Ensure the output directory exists on the HDD
+        # Ensure the output directory exists
         if not self.output_dir.exists():
             try:
                 self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -26,97 +34,123 @@ class SatComDataManager:
             except Exception as e:
                 logging.error(f"Could not create output dir on HDD: {e}")
 
-    def get_sample_list(self):
-        """
-        Scans the input HDD directory for all .iq files.
-        Returns: A list of Path objects.
-        """
-        if not self.input_dir.exists():
-            logging.error(f"Input directory not found: {self.input_dir}")
-            return []
-
-        # Find all files matching the extension
-        files = list(self.input_dir.glob(f"*{self.extension}"))
-        
-        if not files:
-            logging.warning(f"No {self.extension} files found in {self.input_dir}")
-        else:
-            logging.info(f"Found {len(files)} samples ready for processing.")
-            
-        return files
-
     def load_iq_sample(self, file_path):
         """
-        Reads a binary .iq file from the HDD into a numpy array.
-        Assumes Complex64 (Standard for GNURadio/SDR).
+        Reads a binary .iq file.
+        UPDATED: Now includes the smart Int16/Float32 detection so training
+        gets the correct data format automatically.
         """
         try:
-            # reading raw binary data
-            # Adjust 'dtype' if your data is float32 interleaved or int16
-            data = np.fromfile(file_path, dtype=np.complex64)
-            return data
+            # Try Float32 first
+            data = np.fromfile(file_path, dtype=np.float32)
+
+            # Check if it looks like Int16
+            if len(data) > 0 and (np.any(np.isnan(data)) or np.max(np.abs(data)) > 1e5):
+                data = np.fromfile(file_path, dtype=np.int16)
+
+            # Convert to Complex
+            n_pairs = len(data) // 2
+            if n_pairs == 0:
+                return None
+
+            i_samples = data[0:2*n_pairs:2].astype(np.float32) # float32 is enough for Neural Nets
+            q_samples = data[1:2*n_pairs:2].astype(np.float32)
+            signal_complex = i_samples + 1j * q_samples
+            
+            return signal_complex
+            
         except Exception as e:
             logging.error(f"Failed to read file {file_path}: {e}")
             return None
 
+    def create_training_dataset(self, output_json_name='data_for_train.json'):
+        """
+        Scans all files, calculates SNR using snr_utils, looks up labels, 
+        and saves the final JSON for training.
+        """
+        if not self.master_json_path.exists():
+            logging.error(f"Master JSON not found at {self.master_json_path}")
+            return
+
+        logging.info("Loading master database...")
+        with open(self.master_json_path, 'r') as f:
+            database = json.load(f)
+
+        if not self.input_dir.exists():
+            logging.error(f"Input directory not found: {self.input_dir}")
+            return
+
+        iq_files = list(self.input_dir.glob(f"*{self.extension}"))
+        if not iq_files:
+            logging.warning(f"No files found in {self.input_dir}")
+            return
+
+        logging.info(f"Found {len(iq_files)} files. Building dataset...")
+        
+        new_dataset = {}
+        
+        for idx, file_path in enumerate(iq_files):
+            filename = file_path.name
+            
+            # Show progress every 100 files
+            if idx % 100 == 0:
+                print(f"Processing {idx}/{len(iq_files)}...", end='\r')
+
+            # Parse filename: "1_2_0.1_20_1.iq" -> Key: "1_2_0.1_20"
+            name_only = file_path.stem 
+            parts = name_only.split('_')
+            
+            if len(parts) > 1:
+                key = "_".join(parts[:-1])
+                
+                if key in database:
+                    params = database[key]
+                    
+                    # --- CALL SNR UTILS HERE ---
+                    # We pass the full path as a string
+                    snr_val = calculate_snr_raw(str(file_path))
+                    
+                    new_dataset[filename] = {
+                        "mod": params.get("mod"),
+                        "rolloff": params.get("rolloff"),
+                        "snr_measured": snr_val
+                    }
+        
+        print(f"Processing complete. Valid samples: {len(new_dataset)}")
+
+        # Save result to HDD
+        save_path = self.output_dir / output_json_name
+        try:
+            with open(save_path, 'w') as f:
+                json.dump(new_dataset, f, indent=4)
+            logging.info(f"Saved training dataset to: {save_path}")
+        except Exception as e:
+            logging.error(f"Failed to save JSON: {e}")
+
     def save_inference_result(self, original_file_path, results_dict):
         """
-        Saves the network output to the HDD as a JSON file.
-        
-        Args:
-            original_file_path (Path): The path of the input .iq file.
-            results_dict (dict): The output from your network (e.g., {'class': 'QPSK', 'snr': 12})
+        Saves network output to HDD.
         """
-        # Create a filename: sample_01.iq -> sample_01_prediction.json
         output_filename = original_file_path.stem + "_prediction.json"
         save_path = self.output_dir / output_filename
         
-        # Add timestamp to the result data
         results_dict["processed_at"] = datetime.now().isoformat()
         results_dict["source_file"] = str(original_file_path.name)
 
         try:
             with open(save_path, 'w') as f:
                 json.dump(results_dict, f, indent=4)
-            # logging.info(f"Saved: {output_filename}") # Uncomment if you want spam in logs
         except Exception as e:
-            logging.error(f"Failed to save results for {original_file_path.name}: {e}")
+            logging.error(f"Failed to save results: {e}")
 
-# ==========================================
-# Example: How to integrate this into your Main Loop
-# ==========================================
+# =========================================================
+#  Standalone Execution: Run this to generate the dataset
+# =========================================================
 if __name__ == "__main__":
+    print("--- SatCom Data Manager ---")
     
-    # 1. Initialize Manager
-    data_mgr = SatComDataManager()
+    manager = SatComDataManager()
     
-    # 2. Get all files from HDD
-    iq_files = data_mgr.get_sample_list()
-
-    # 3. Processing Loop
-    print("Starting Batch Processing...")
-    
-    for iq_file in iq_files:
-        # A. Load Data (HDD -> RAM)
-        iq_data = data_mgr.load_iq_sample(iq_file)
-        
-        if iq_data is None:
-            continue
-
-        # --- NETWORK INFERENCE HERE ---
-        # inputs = preprocess(iq_data)
-        # outputs = model(inputs)
-        
-        # Mocking a result for demonstration
-        mock_output = {
-            "modulation": "QPSK",
-            "confidence": 0.98,
-            "snr_db": 14.5,
-            "is_anomaly": False
-        }
-        # ------------------------------
-
-        # B. Save Result (RAM -> HDD)
-        data_mgr.save_inference_result(iq_file, mock_output)
-
-    print("Processing Complete. Check /mnt/usb/amir_and_shay_results")
+    # Run the dataset creation process
+    # This replaces the old 'main' in snr_utils
+    manager.create_training_dataset()

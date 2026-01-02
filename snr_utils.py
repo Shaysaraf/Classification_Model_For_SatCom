@@ -1,16 +1,15 @@
-import json
-import os
 import numpy as np
 
 def calculate_snr_raw(file_path):
     """
     Calculates SNR for raw IQ samples using Time Domain / Variance method.
+    Auto-detects if the file is Float32 or Int16.
     """
     try:
-        # 1. Load data
+        # 1. Try reading as Float32 (Standard)
         data = np.fromfile(file_path, dtype=np.float32)
         
-        # Auto-detect if it's actually int16
+        # Auto-detect if it's actually Int16 (heuristic: huge values or NaNs)
         if len(data) > 0 and (np.any(np.isnan(data)) or np.max(np.abs(data)) > 1e5):
             data = np.fromfile(file_path, dtype=np.int16)
 
@@ -37,52 +36,3 @@ def calculate_snr_raw(file_path):
 
     except Exception:
         return 0.0
-
-def main():
-    input_json = 'data_ready_SR.json'
-    output_json = 'data_for_train.json'
-    
-    if not os.path.exists(input_json):
-        print(f"CRITICAL: {input_json} not found!")
-        return
-
-    with open(input_json, 'r') as f:
-        database = json.load(f)
-
-    new_dataset = {}
-    iq_files = [f for f in os.listdir('.') if f.endswith('.iq')]
-    
-    if not iq_files:
-        print("No .iq files found.")
-        return
-
-    print(f"Found {len(iq_files)} files. Processing...")
-
-    for filename in iq_files:
-        # "1_2_0.1_20_1.iq" -> lookup key "1_2_0.1_20"
-        name_only = os.path.splitext(filename)[0]
-        parts = name_only.split('_')
-        
-        if len(parts) > 1:
-            key = "_".join(parts[:-1])
-            
-            if key in database:
-                snr_val = calculate_snr_raw(filename)
-                params = database[key]
-                
-                # --- NEW OUTPUT FORMAT ---
-                new_dataset[filename] = {
-                    "mod": params.get("mod"),
-                    "rolloff": params.get("rolloff"),
-                    "snr_measured": snr_val
-                }
-                print(f"Processed: {filename} -> {snr_val} dB")
-
-    # Write the new formatted JSON
-    with open(output_json, 'w') as f:
-        json.dump(new_dataset, f, indent=4)
-    
-    print(f"\nSuccessfully created {output_json} with the requested format.")
-
-if __name__ == "__main__":
-    main()
