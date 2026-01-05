@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import logging
+import torch  # <--- REQUIRED for your specific files
 from pathlib import Path
 from datetime import datetime
 
@@ -37,7 +38,6 @@ class SatComDataManager:
     def get_sample_list(self):
         """
         Returns a list of path objects for all .iq files in the input directory.
-        Used by modulation_main.py to load the dataset.
         """
         if not self.input_dir.exists():
             logging.warning(f"Input directory not found: {self.input_dir}")
@@ -51,15 +51,26 @@ class SatComDataManager:
 
     def load_iq_sample(self, file_path):
         """
-        Reads a binary .iq file.
-        UPDATED: Now includes the smart Int16/Float32 detection so training
-        gets the correct data format automatically.
+        Reads IQ data from either a PyTorch (.pt/.iq) archive OR a raw binary file.
         """
         try:
+            # --- METHOD 1: Try loading as PyTorch Tensor (Fixes your specific error) ---
+            try:
+                # map_location='cpu' ensures it loads even if saved on a different GPU
+                tensor_data = torch.load(file_path, map_location='cpu')
+                
+                if isinstance(tensor_data, torch.Tensor):
+                    # Convert to numpy complex64
+                    return tensor_data.numpy().astype(np.complex64)
+            except Exception:
+                # Not a torch file, proceed to Method 2
+                pass
+
+            # --- METHOD 2: Fallback to Raw Binary (Standard .iq) ---
             # Try Float32 first
             data = np.fromfile(file_path, dtype=np.float32)
 
-            # Check if it looks like Int16
+            # Check if it looks like Int16 (Heuristic: massive values or NaNs)
             if len(data) > 0 and (np.any(np.isnan(data)) or np.max(np.abs(data)) > 1e5):
                 data = np.fromfile(file_path, dtype=np.int16)
 
@@ -68,7 +79,7 @@ class SatComDataManager:
             if n_pairs == 0:
                 return None
 
-            i_samples = data[0:2*n_pairs:2].astype(np.float32) # float32 is enough for Neural Nets
+            i_samples = data[0:2*n_pairs:2].astype(np.float32)
             q_samples = data[1:2*n_pairs:2].astype(np.float32)
             signal_complex = i_samples + 1j * q_samples
             
@@ -131,7 +142,7 @@ class SatComDataManager:
                         "snr_measured": snr_val
                     }
         
-        print(f"Processing complete. Valid samples: {len(new_dataset)}")
+        print(f"\nProcessing complete. Valid samples: {len(new_dataset)}")
 
         # Save result to HDD
         save_path = self.output_dir / output_json_name
@@ -167,5 +178,4 @@ if __name__ == "__main__":
     manager = SatComDataManager()
     
     # Run the dataset creation process
-    # This replaces the old 'main' in snr_utils
     manager.create_training_dataset()
