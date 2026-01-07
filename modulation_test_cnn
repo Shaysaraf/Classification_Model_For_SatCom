@@ -1,0 +1,176 @@
+import torch
+import torch.nn as nn
+import numpy as np
+import os
+import sys
+import json
+import matplotlib.pyplot as plt
+import seaborn as sns
+from torch.utils.data import DataLoader, Dataset
+from sklearn.metrics import confusion_matrix, classification_report
+
+# --- IMPORTS ---
+# We assume these files exist based on your previous code
+try:
+    from modulation_models.modulation_model_cnn import CNNClassifier
+    from data_manager import SatComDataManager 
+except ImportError:
+    print("Error: Could not import dependencies. Run this from the same folder as your main script.")
+    sys.exit(1)
+
+# ==============================================================================
+# 1. REUSE DATASET CLASS (Copy of what was in main)
+# ==============================================================================
+class LazyIQDataset(Dataset):
+    def __init__(self, data_mgr, modulations, segment_length):
+        self.data_mgr = data_mgr
+        self.segment_length = segment_length
+        self.file_index = []
+        
+        if not data_mgr.master_json_path.exists():
+            raise FileNotFoundError(f"Metadata not found at {data_mgr.master_json_path}")
+
+        print(f"Loading metadata...")
+        with open(data_mgr.master_json_path, 'r') as f:
+            database = json.load(f)
+
+        files = data_mgr.get_sample_list()
+        mod_map = {m.lower().strip(): i for i, m in enumerate(modulations)}
+        
+        # Filter files just like training
+        for file_path in files:
+            name_stem = file_path.stem
+            candidate = name_stem
+            found_entry = None
+            while candidate:
+                if candidate in database:
+                    found_entry = database[candidate]
+                    break
+                if '_' in candidate:
+                    candidate = candidate.rsplit('_', 1)[0]
+                else:
+                    break
+            
+            if found_entry:
+                raw_mod = str(found_entry.get("modcod", "")).strip()
+                if raw_mod:
+                    current_mod = raw_mod.split()[0].lower()
+                    if current_mod in mod_map:
+                        label = mod_map[current_mod]
+                        self.file_index.append((file_path, label))
+
+    def __len__(self):
+        return len(self.file_index)
+
+    def __getitem__(self, idx):
+        file_path, label = self.file_index[idx]
+        iq_data = self.data_mgr.load_iq_sample(file_path)
+        
+        if iq_data is None:
+            return torch.zeros((2, self.segment_length), dtype=torch.float32), torch.tensor(label, dtype=torch.long)
+
+        iq_data = iq_data.astype(np.complex64)
+        max_val = np.max(np.abs(iq_data))
+        if max_val > 0:
+            iq_data /= (max_val + 1e-6)
+            
+        iq_arr = np.column_stack((iq_data.real, iq_data.imag))
+        
+        if len(iq_arr) >= self.segment_length:
+            segment = iq_arr[:self.segment_length]
+        else:
+            padding = np.zeros((self.segment_length - len(iq_arr), 2), dtype=iq_arr.dtype)
+            segment = np.vstack((iq_arr, padding))
+            
+        segment = segment.transpose() 
+        return torch.from_numpy(segment).float(), torch.tensor(label, dtype=torch.long)
+
+# ==============================================================================
+# 2. EVALUATION LOGIC
+# ==============================================================================
+def evaluate_model(model_path, params):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Loading model from: {model_path}")
+    print(f"Device: {device}")
+
+    # 1. Setup Data
+    data_mgr = SatComDataManager()
+    # We use the full dataset here, or you could create a specific test split logic
+    dataset = LazyIQDataset(data_mgr, params['modulations'], params['segment_length'])
+    
+    # Use workers=2 for speed, similar to training
+    test_loader = DataLoader(
+        dataset, 
+        batch_size=32, 
+        shuffle=False, 
+        num_workers=2, 
+        persistent_workers=True,
+        pin_memory=True
+    )
+
+    # 2. Load Model Structure & Weights
+    num_classes = len(params['modulations'])
+    model = CNNClassifier(num_classes, params['segment_length'])
+    
+    try:
+        model.load_state_dict(torch.load(model_path, map_location=device))
+    except FileNotFoundError:
+        print(f"Error: Model file not found at {model_path}")
+        return
+
+    model.to(device)
+    model.eval()
+
+    # 3. Inference Loop
+    all_preds = []
+    all_labels = []
+
+    print("Running Inference...")
+    with torch.no_grad():
+        for i, (inputs, labels) in enumerate(test_loader):
+            inputs = inputs.to(device)
+            # CNN expects (Batch, 2, 128) which comes directly from Dataset, 
+            # so no permute needed for CNN.
+            
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.numpy())
+            
+            if i % 10 == 0:
+                print(f"Processed batch {i}...", end='\r')
+
+    # 4. Metrics
+    print("\n--- Classification Report ---")
+    print(classification_report(all_labels, all_preds, target_names=params['modulations']))
+
+    # 5. Confusion Matrix Plot
+    cm = confusion_matrix(all_labels, all_preds)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=params['modulations'], 
+                yticklabels=params['modulations'])
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix - CNN')
+    
+    plot_path = "confusion_matrix_cnn.png"
+    plt.savefig(plot_path)
+    print(f"\n[DONE] Confusion matrix saved to {plot_path}")
+
+# ==============================================================================
+# 3. MAIN
+# ==============================================================================
+if __name__ == "__main__":
+    # Ensure this matches your training config
+    params = {
+        'segment_length': 128,
+        'modulations': ['16APSK', '8PSK', 'QPSK', 'BPSK', '32APSK'],
+    }
+    
+    # Path to the saved model file
+    # Ensure this matches the save_dir from your main script
+    model_path = os.path.join("models_results_modulation", "mod_cnn.pth")
+    
+    evaluate_model(model_path, params)

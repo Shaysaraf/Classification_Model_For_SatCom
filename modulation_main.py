@@ -212,9 +212,9 @@ def main():
     # --- CONFIGURATION ---
     params = {
         'segment_length': 128,
-        'modulations': ['16APSK', '8PSK', 'QPSK', 'BPSK', '32APSK'], 
-        'batch_size': 32,
-        'epochs': 10,            
+        'modulations': ['16APSK', '8PSK', 'QPSK'], 
+        'batch_size': 16,
+        'epochs': 30,            
         'device': torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         'save_dir': "models_results_modulation"
     }
@@ -247,7 +247,7 @@ def main():
         drop_last=True, 
         num_workers=2,         
         persistent_workers=True, 
-        pin_memory=True,
+        pin_memory=False,
         prefetch_factor=2      
     )
     
