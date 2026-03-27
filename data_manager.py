@@ -2,15 +2,9 @@ import os
 import json
 import numpy as np
 import logging
-import torch  # <--- REQUIRED for your specific files
+import torch  # Required for loading .pt files
 from pathlib import Path
 from datetime import datetime
-
-# --- IMPORT YOUR UTILS ---
-try:
-    from snr_utils import calculate_snr_raw
-except ImportError:
-    logging.error("CRITICAL: 'snr_utils.py' not found. Ensure it is in the same directory.")
 
 # Configure logging
 logging.basicConfig(
@@ -21,10 +15,10 @@ logging.basicConfig(
 class SatComDataManager:
     def __init__(self):
         # --- PATHS ---
+        # Update these paths if your mount point changes
         self.input_dir = Path("/mnt/usb/iq_augmented_cut")
         self.output_dir = Path("/mnt/usb/amir_and_shay_results")
-        # Path to your master lookup table
-        self.master_json_path = Path("data_ready_SR.json") 
+        self.master_json_path = Path("data_ready_SR.json") # Restored this line
         self.extension = ".iq"
 
         # Ensure the output directory exists
@@ -46,15 +40,18 @@ class SatComDataManager:
         files = list(self.input_dir.glob(f"*{self.extension}"))
         if not files:
             logging.warning(f"No {self.extension} files found in {self.input_dir}")
+        else:
+            logging.info(f"Found {len(files)} files in {self.input_dir}")
             
         return files
 
     def load_iq_sample(self, file_path):
         """
         Reads IQ data from either a PyTorch (.pt/.iq) archive OR a raw binary file.
+        Returns: Numpy array (Complex64) or None if failed.
         """
         try:
-            # --- METHOD 1: Try loading as PyTorch Tensor (Fixes your specific error) ---
+            # --- METHOD 1: Try loading as PyTorch Tensor ---
             try:
                 # map_location='cpu' ensures it loads even if saved on a different GPU
                 tensor_data = torch.load(file_path, map_location='cpu')
@@ -89,93 +86,52 @@ class SatComDataManager:
             logging.error(f"Failed to read file {file_path}: {e}")
             return None
 
-    def create_training_dataset(self, output_json_name='data_for_train.json'):
-        """
-        Scans all files, calculates SNR using snr_utils, looks up labels, 
-        and saves the final JSON for training.
-        """
-        if not self.master_json_path.exists():
-            logging.error(f"Master JSON not found at {self.master_json_path}")
-            return
-
-        logging.info("Loading master database...")
-        with open(self.master_json_path, 'r') as f:
-            database = json.load(f)
-
-        if not self.input_dir.exists():
-            logging.error(f"Input directory not found: {self.input_dir}")
-            return
-
-        iq_files = list(self.input_dir.glob(f"*{self.extension}"))
-        if not iq_files:
-            logging.warning(f"No files found in {self.input_dir}")
-            return
-
-        logging.info(f"Found {len(iq_files)} files. Building dataset...")
-        
-        new_dataset = {}
-        
-        for idx, file_path in enumerate(iq_files):
-            filename = file_path.name
-            
-            # Show progress every 100 files
-            if idx % 100 == 0:
-                print(f"Processing {idx}/{len(iq_files)}...", end='\r')
-
-            # Parse filename: "1_2_0.1_20_1.iq" -> Key: "1_2_0.1_20"
-            name_only = file_path.stem 
-            parts = name_only.split('_')
-            
-            if len(parts) > 1:
-                key = "_".join(parts[:-1])
-                
-                if key in database:
-                    params = database[key]
-                    
-                    # --- CALL SNR UTILS HERE ---
-                    # We pass the full path as a string
-                    snr_val = calculate_snr_raw(str(file_path))
-                    
-                    new_dataset[filename] = {
-                        "mod": params.get("mod"),
-                        "rolloff": params.get("rolloff"),
-                        "snr_measured": snr_val
-                    }
-        
-        print(f"\nProcessing complete. Valid samples: {len(new_dataset)}")
-
-        # Save result to HDD
-        save_path = self.output_dir / output_json_name
-        try:
-            with open(save_path, 'w') as f:
-                json.dump(new_dataset, f, indent=4)
-            logging.info(f"Saved training dataset to: {save_path}")
-        except Exception as e:
-            logging.error(f"Failed to save JSON: {e}")
-
     def save_inference_result(self, original_file_path, results_dict):
         """
-        Saves network output to HDD.
+        Saves network output/predictions to HDD as a JSON file.
         """
-        output_filename = original_file_path.stem + "_prediction.json"
+        output_filename = Path(original_file_path).stem + "_prediction.json"
         save_path = self.output_dir / output_filename
         
+        # Add metadata
         results_dict["processed_at"] = datetime.now().isoformat()
-        results_dict["source_file"] = str(original_file_path.name)
+        results_dict["source_file"] = str(Path(original_file_path).name)
 
         try:
             with open(save_path, 'w') as f:
                 json.dump(results_dict, f, indent=4)
+            logging.info(f"Saved results to: {save_path}")
         except Exception as e:
             logging.error(f"Failed to save results: {e}")
 
 # =========================================================
-#  Standalone Execution: Run this to generate the dataset
+#  Standalone Execution: Test the Data Loading
 # =========================================================
 if __name__ == "__main__":
     print("--- SatCom Data Manager ---")
     
     manager = SatComDataManager()
     
-    # Run the dataset creation process
-    manager.create_training_dataset()
+    # 1. Get list of files
+    all_files = manager.get_sample_list()
+    
+    if all_files:
+        # 2. Test load the first file
+        test_file = all_files[0]
+        print(f"\nAttempting to load: {test_file.name}")
+        
+        data = manager.load_iq_sample(test_file)
+        
+        if data is not None:
+            print(f"Successfully loaded data.")
+            print(f"Shape: {data.shape}")
+            print(f"Type: {data.dtype}")
+            print(f"First 5 samples: {data[:5]}")
+            
+            # 3. Test saving a dummy result
+            dummy_result = {"prediction": "QPSK", "confidence": 0.98}
+            manager.save_inference_result(test_file, dummy_result)
+        else:
+            print("Failed to load data.")
+    else:
+        print("No files found to test.")
