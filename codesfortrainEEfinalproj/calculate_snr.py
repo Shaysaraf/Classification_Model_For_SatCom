@@ -1,5 +1,8 @@
 import os
 import json
+import glob
+import random
+import argparse
 import numpy as np
 from scipy.signal import welch
 from data_manager import SatComDataManager
@@ -63,13 +66,24 @@ if __name__ == "__main__":
     # The signal in IQ format is at baseband (0 Hz offset)
     baseband_fc = 0.0 
 
-    target_files = [
-        r"c:\Users\amira\OneDrive\Desktop\PycharmProjects\main-python-project\final_proj_satcom\Classification_Model_For_SatCom\1_A_4.25_40_5.iq",
-        r"c:\Users\amira\OneDrive\Desktop\PycharmProjects\main-python-project\final_proj_satcom\Classification_Model_For_SatCom\3_J_4.0_20_3.iq",
-        r"c:\Users\amira\OneDrive\Desktop\PycharmProjects\main-python-project\final_proj_satcom\Classification_Model_For_SatCom\6_E_6.0_30_1.iq"
-    ]
+    parser = argparse.ArgumentParser(description="Calculate average SNR for 10% of IQ files in a directory.")
+    parser.add_argument("sample_dir", type=str, help="Path to the directory containing .iq files")
+    args = parser.parse_args()
+
+    sample_dir = args.sample_dir
+    all_files = glob.glob(os.path.join(sample_dir, "*.iq"))
     
+    if not all_files:
+        print(f"No .iq files found in {sample_dir}")
+        exit(1)
+        
+    num_to_sample = max(1, int(len(all_files) * 0.10))
+    target_files = random.sample(all_files, num_to_sample)
+    
+    print(f"Found {len(all_files)} files. Sampling 10% ({num_to_sample} files) for SNR calculation.")
     print(f"Global Parameters from JSON: Sample Rate = {fs_mhz} MHz, RF Center Freq = {rf_fc_mhz} MHz\n")
+    
+    snr_values = []
     
     for file_path in target_files:
         filename = os.path.basename(file_path)
@@ -114,4 +128,15 @@ if __name__ == "__main__":
         print(f"  -> Symbol Rate: {sr_mhz} MHz, Rolloff: {ro} => Bandwidth: {signal_bw_mhz:.2f} MHz")
         
         snr_db = estimate_snr_psd(iq_samples, fs, baseband_fc, signal_bw)
+        if snr_db > -900:  # ignore invalid/empty ones
+            snr_values.append(snr_db)
         print(f"  -> Estimated SNR: {snr_db:.2f} dB\n")
+
+    if snr_values:
+        avg_snr = np.mean(snr_values)
+        print("="*40)
+        print(f"Calculated SNR for {len(snr_values)} valid samples.")
+        print(f"AVERAGE SNR: {avg_snr:.2f} dB")
+        print("="*40)
+    else:
+        print("Could not calculate SNR for any of the selected files.")
