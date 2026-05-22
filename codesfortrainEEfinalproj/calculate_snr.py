@@ -77,10 +77,10 @@ if __name__ == "__main__":
         print(f"No .iq files found in {sample_dir}")
         exit(1)
         
-    num_to_sample = max(1, int(len(all_files) * 0.10))
+    num_to_sample = max(1, int(len(all_files) * 1.0))
     target_files = random.sample(all_files, num_to_sample)
     
-    print(f"Found {len(all_files)} files. Sampling 10% ({num_to_sample} files) for SNR calculation.")
+    print(f"Found {len(all_files)} files. Sampling 100% ({num_to_sample} files) for SNR calculation.")
     print(f"Global Parameters from JSON: Sample Rate = {fs_mhz} MHz, RF Center Freq = {rf_fc_mhz} MHz\n")
     
     snr_values = []
