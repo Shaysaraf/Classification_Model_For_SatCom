@@ -17,7 +17,7 @@ from modulation_models.modulation_model_resnet18 import resnet18
 # ==========================================
 DATA_DIR = Path(r"D:\versal_ready_bins")
 # Wrapped in Path() and ready for your NEW 2D trained weights
-MODEL_WEIGHTS = Path(r"D:\best_resnet_cnn.pth") 
+MODEL_WEIGHTS = Path(r"D:\best_resnet18_dpu.pth") 
 BATCH_SIZE = 64
 SEGMENT_LENGTH = 512
 MODULATIONS = ('16apsk', '8psk', 'qpsk')
