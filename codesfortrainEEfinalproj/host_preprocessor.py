@@ -8,10 +8,10 @@ from tqdm import tqdm
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Paths - Fixed to D: drive
+# Paths - Adjust these to match your environment
 INPUT_DIR = Path(os.environ.get('DATA_DIR', r'D:\iq_augmented_cut'))
-OUTPUT_DIR = Path(r'D:\versal_ready_bins')
-METADATA_FILE = Path(os.environ.get('METADATA_FILE', r'D:\data_ready_SR.json'))
+OUTPUT_DIR = Path("versal_ready_bins")
+METADATA_FILE = Path(os.environ.get('METADATA_FILE', 'data_ready_SR.json'))
 
 # Model Parameters
 SEGMENT_LENGTH = 512
@@ -21,11 +21,8 @@ MODULATIONS = ('16apsk', '8psk', 'qpsk')
 # ROBUST .IQ LOADER
 # ==========================================
 def load_iq_sample(file_path):
-    """
-    Reads IQ data from either a PyTorch archive OR a raw binary .iq file.
-    """
+    """Reads IQ data from PyTorch archive OR raw binary .iq"""
     try:
-        # METHOD 1: Try loading as PyTorch Tensor
         try:
             tensor_data = torch.load(file_path, map_location='cpu')
             if isinstance(tensor_data, torch.Tensor):
@@ -33,14 +30,12 @@ def load_iq_sample(file_path):
         except Exception:
             pass 
 
-        # METHOD 2: Fallback to Raw Binary
         data = np.fromfile(file_path, dtype=np.float32)
         if len(data) > 0 and (np.any(np.isnan(data)) or np.max(np.abs(data)) > 1e5):
             data = np.fromfile(file_path, dtype=np.int16)
 
         n_pairs = len(data) // 2
-        if n_pairs == 0:
-            return None
+        if n_pairs == 0: return None
 
         i_samples = data[0:2*n_pairs:2].astype(np.float32)
         q_samples = data[1:2*n_pairs:2].astype(np.float32)
@@ -70,10 +65,13 @@ def build_versal_dataset():
     mod_map = {m.lower().strip(): i for i, m in enumerate(MODULATIONS)}
     manifest = {}
     
-    files = list(INPUT_DIR.glob("*.iq"))
-    print(f"Found {len(files)} .iq files. Outputting to {OUTPUT_DIR}")
+    files = list(INPUT_DIR.glob("*.iq")) + list(INPUT_DIR.glob("*.pt"))
+    print(f"Found {len(files)} files to process in {INPUT_DIR}")
     
-    for file_path in tqdm(files, desc="Processing signals"):
+    processed_count = 0
+    
+    for file_path in tqdm(files, desc="Processing signals for Versal DPU"):
+        # 1. Label Matching
         candidate = file_path.stem
         found_entry = None
         
@@ -86,27 +84,29 @@ def build_versal_dataset():
             else: 
                 break
                 
-        if not found_entry:
-            continue
+        if not found_entry: continue
             
         raw_mod = str(found_entry.get("modcod", "")).strip().split()[0].lower()
-        if raw_mod not in mod_map:
-            continue
+        if raw_mod not in mod_map: continue
             
         label = mod_map[raw_mod]
+        
+        # 2. Data Extraction
         iq_data = load_iq_sample(file_path)
-        if iq_data is None:
-            continue
+        if iq_data is None: continue
             
+        # 3. Normalization
         iq_data = iq_data.astype(np.complex64)
         max_val = np.max(np.abs(iq_data))
         if max_val > 0: 
             iq_data /= (max_val + 1e-6)
             
+        # 4. Feature Engineering
         amp = np.abs(iq_data)
         phase = np.angle(iq_data)
         iq_arr = np.column_stack((iq_data.real, iq_data.imag, amp, phase))
         
+        # 5. Cropping / Padding (Evaluation Center Crop)
         if len(iq_arr) >= SEGMENT_LENGTH:
             start = (len(iq_arr) - SEGMENT_LENGTH) // 2
             segment = iq_arr[start:start + SEGMENT_LENGTH]
@@ -114,23 +114,47 @@ def build_versal_dataset():
             padding = np.zeros((SEGMENT_LENGTH - len(iq_arr), 4), dtype=iq_arr.dtype)
             segment = np.vstack((iq_arr, padding))
             
+        # 6. Transpose to NCHW Format -> Shape becomes (4, 512)
         segment = segment.transpose()
-        segment_contiguous = np.ascontiguousarray(segment, dtype=np.float32)
         
+        # =========================================================
+        # 7. MATCH PYTORCH NETWORK DIMENSIONS EXACTLY
+        # =========================================================
+        # The PyTorch DataLoader inherently adds a batch dimension. 
+        # We manually add it here so the tensor matches the exact (1, 4, 512)
+        # shape expected by resnet18's forward pass.
+        segment_batched = np.expand_dims(segment, axis=0) 
+        
+        # **IF** your compiled VART graph chokes and explicitly expects the 
+        # 2D spatial parameters from input_shape=(1, 512), comment out the line 
+        # above and uncomment the line below:
+        # segment_batched = segment.reshape(1, 4, 1, SEGMENT_LENGTH)
+        # =========================================================
+
+        # 8. ENFORCE C-CONTIGUOUS MEMORY (CRITICAL FOR VERSAL AIE)
+        segment_contiguous = np.ascontiguousarray(segment_batched, dtype=np.float32)
+        
+        # 9. Dump to Raw Binary
         out_name = f"{file_path.stem}.bin"
-        segment_contiguous.tofile(OUTPUT_DIR / out_name)
+        out_path = OUTPUT_DIR / out_name
+        segment_contiguous.tofile(out_path)
         
         manifest[out_name] = {
             "label": label, 
             "mod": raw_mod,
             "original_file": file_path.name
         }
+        processed_count += 1
         
-    with open(OUTPUT_DIR / "versal_manifest.json", "w") as f:
+    # Export the manifest
+    manifest_path = OUTPUT_DIR / "versal_manifest.json"
+    with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=4)
         
     print(f"\n=== PREPROCESSING COMPLETE ===")
-    print(f"Files saved to: {OUTPUT_DIR.resolve()}")
+    print(f"Successfully processed {processed_count} files.")
+    print(f"Output Shape Enforced: {segment_contiguous.shape}")
+    print(f"Output Directory: {OUTPUT_DIR.resolve()}")
 
 if __name__ == "__main__":
     build_versal_dataset()
