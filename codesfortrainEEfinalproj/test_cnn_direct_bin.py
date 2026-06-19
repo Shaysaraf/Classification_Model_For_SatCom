@@ -15,8 +15,8 @@ from modulation_models.modulation_model_resnet18 import resnet18
 # CONFIGURATION
 # ==========================================
 DATA_DIR = r"D:\versal_ready_bins" 
+MODEL_WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_resnet_cnn.pth")
 MANIFEST_PATH = os.path.join(DATA_DIR, "versal_manifest.json")
-MODEL_WEIGHTS = "best_resnet_cnn.pth" # Ensure this matches your saved file name
 BATCH_SIZE = 64
 SEGMENT_LENGTH = 512
 MODULATIONS = ('16apsk', '8psk', 'qpsk') 
