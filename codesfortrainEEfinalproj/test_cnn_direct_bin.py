@@ -2,99 +2,129 @@ import os
 import json
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset
-from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
+from pathlib import Path
+from torch.utils.data import Dataset, DataLoader
+from sklearn.metrics import classification_report, confusion_matrix
 from tqdm import tqdm
 
-# Import your specific ResNet18 architecture
+# IMPORTANT: Import your exact 2D ResNet18 architecture from your model file
 from modulation_models.modulation_model_resnet18 import resnet18
 
 # ==========================================
-# CONFIGURATION
+# 1. CONFIGURATION
 # ==========================================
-DATA_DIR = r"D:\versal_ready_bins" 
-MODEL_WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_resnet_cnn.pth")
-MANIFEST_PATH = os.path.join(DATA_DIR, "versal_manifest.json")
+DATA_DIR = Path(r"D:\versal_ready_bins")
+# Wrapped in Path() and ready for your NEW 2D trained weights
+MODEL_WEIGHTS = Path(r"D:\best_resnet_cnn.pth") 
 BATCH_SIZE = 64
 SEGMENT_LENGTH = 512
-MODULATIONS = ('16apsk', '8psk', 'qpsk') 
+MODULATIONS = ('16apsk', '8psk', 'qpsk')
+
+# Auto-detect hardware
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class RawBinaryDataset(Dataset):
-    def __init__(self, data_dir, manifest_path):
-        self.data_dir = data_dir
-        if not os.path.exists(manifest_path):
-            raise FileNotFoundError(f"Manifest not found: {manifest_path}")
+# ==========================================
+# 2. DATASET DEFINITION
+# ==========================================
+class VersalDPUDataset(Dataset):
+    def __init__(self, data_dir):
+        self.data_dir = Path(data_dir)
+        manifest_path = self.data_dir / "versal_manifest.json"
+        
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Manifest not found at {manifest_path}. Did you run the preprocessor?")
             
         with open(manifest_path, 'r') as f:
             self.manifest = json.load(f)
-        self.file_list = list(self.manifest.keys())
+            
+        self.filenames = list(self.manifest.keys())
 
     def __len__(self):
-        return len(self.file_list)
+        return len(self.filenames)
 
     def __getitem__(self, idx):
-        filename = self.file_list[idx]
-        filepath = os.path.join(self.data_dir, filename)
-        
-        # Read pre-formatted (4, 512) binary
-        signal_array = np.fromfile(filepath, dtype=np.float32).reshape(4, 512)
+        filename = self.filenames[idx]
+        filepath = self.data_dir / filename
         label = self.manifest[filename]["label"]
         
-        return torch.from_numpy(signal_array), torch.tensor(label, dtype=torch.long)
+        # Read the C-Contiguous float32 binary file
+        data_array = np.fromfile(filepath, dtype=np.float32).reshape(4, 1, SEGMENT_LENGTH)
+        
+        return torch.from_numpy(data_array), torch.tensor(label, dtype=torch.long)
 
-def evaluate_resnet():
-    print(f"--- Evaluating ResNet18 on: {DEVICE} ---")
-    print(f"Loading weights: {MODEL_WEIGHTS}")
-
-    dataset = RawBinaryDataset(DATA_DIR, MANIFEST_PATH)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+# ==========================================
+# 3. EVALUATION LOOP
+# ==========================================
+def run_evaluation():
+    print(f"--- Starting Evaluation on {DEVICE} ---")
     
-    # Instantiate with the exact training parameters
+    if not DATA_DIR.exists():
+        print(f"[!] Error: Data directory {DATA_DIR} not found.")
+        return
+    if not MODEL_WEIGHTS.exists():
+        print(f"[!] Error: Weights file {MODEL_WEIGHTS.resolve()} not found. Ensure you have retrained the 2D model.")
+        return
+
+    # 1. Load Data
+    dataset = VersalDPUDataset(DATA_DIR)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+    print(f"Loaded {len(dataset)} testing samples.")
+
+    # 2. Initialize Model
     model = resnet18(
         num_classes=len(MODULATIONS), 
         in_channels=4, 
         input_shape=(1, SEGMENT_LENGTH)
     )
     
-    if not os.path.exists(MODEL_WEIGHTS):
-        print(f"[!] Error: {MODEL_WEIGHTS} not found.")
-        return
-
-    model.load_state_dict(torch.load(MODEL_WEIGHTS, map_location=DEVICE))
+    # Load weights safely
+    state_dict = torch.load(MODEL_WEIGHTS, map_location=DEVICE, weights_only=True)
+    model.load_state_dict(state_dict)
     model.to(DEVICE)
     model.eval()
 
-    all_preds, all_labels = [], []
+    all_preds = []
+    all_labels = []
 
+    # 3. Run Inference
     with torch.no_grad():
         for inputs, labels in tqdm(dataloader, desc="Evaluating"):
             inputs = inputs.to(DEVICE)
             
-            # ResNet-18 typically expects (Batch, Channels, Height, Width)
-            # If your model expects 2D images, we unsqueeze to add the height dimension
-            if inputs.dim() == 3:
-                inputs = inputs.unsqueeze(2) 
-                
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
+            
             all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+            all_labels.extend(labels.numpy())
 
-    # Compute Statistics
-    accuracy = (np.array(all_preds) == np.array(all_labels)).mean() * 100.0
-    print(f"\nTOTAL ACCURACY: {accuracy:.2f}%")
+    # 4. Calculate Metrics
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+    
+    accuracy = (all_preds == all_labels).mean() * 100.0
+    print(f"\n=========================================")
+    print(f" TOTAL ACCURACY: {accuracy:.2f}%")
+    print(f"=========================================\n")
+    
+    print("Classification Report:")
     print(classification_report(all_labels, all_preds, target_names=MODULATIONS))
 
-    # Confusion Matrix
+    # 5. Generate Confusion Matrix
     cm = confusion_matrix(all_labels, all_preds, normalize='true')
-    plt.figure(figsize=(10, 8))
+    
+    plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='.2%', cmap='Blues', 
                 xticklabels=MODULATIONS, yticklabels=MODULATIONS)
-    plt.savefig("validation_results.png")
-    print("[+] Saved confusion matrix to 'validation_results.png'")
+    plt.title("ResNet18 Confusion Matrix")
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    
+    cm_path = "evaluation_confusion_matrix.png"
+    plt.tight_layout()
+    plt.savefig(cm_path)
+    print(f"[+] Saved confusion matrix to: {os.path.abspath(cm_path)}")
 
 if __name__ == "__main__":
-    evaluate_resnet()
+    run_evaluation()
