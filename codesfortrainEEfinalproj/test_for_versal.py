@@ -1,0 +1,86 @@
+import os
+import json
+import argparse
+import numpy as np
+import VART
+
+def main():
+    parser = argparse.ArgumentParser(description="Versal Edge DPU Accuracy Test Using Pre-processed Binaries")
+    parser.add_argument("--snapshot", default="/run/media/mmcblk0p1/snapshot.VE2802_NPU_IP_O00_A304_M3.modulation_model_resnet18_16bf.TF")
+    parser.add_argument("--net_name", default="snapshot.VE2802_NPU_IP_O00_A304_M3.modulation_model_resnet18_16bf.TF")
+    parser.add_argument("--bin_dir", default="/run/media/mmcblk0p1/versal_ready_bins")
+    parser.add_argument("--manifest", default="/run/media/mmcblk0p1/versal_ready_bins/versal_manifest.json")
+    args = parser.parse_args()
+
+    # 1. Load the Pre-processed Dataset Manifest
+    if not os.path.exists(args.manifest):
+        print(f"[ERROR] Pre-processed manifest missing at: {args.manifest}")
+        return
+
+    with open(args.manifest, "r") as f:
+        manifest = json.load(f)
+
+    filenames = list(manifest.keys())
+    total_samples = len(filenames)
+    print(f"[INFO] Successfully loaded manifest. Found {total_samples} pre-processed target binaries.")
+
+    # 2. Initialize VART Runner Exactly From Your Specification
+    print("[INFO] Initializing VART Hardware Runner...")
+    model = VART.Runner(snapshot_dir=args.snapshot, network_name=args.net_name)
+    target_dtype = model.input_types[0]
+    print(f"[INFO] Target DPU Hardware Input Type: {target_dtype}")
+
+    # Meta definitions for zero-dependency scoring
+    modulations = ("16apsk", "8psk", "qpsk")
+    num_classes = len(modulations)
+    confusion_matrix = np.zeros((num_classes, num_classes), dtype=np.int32)
+    correct = 0
+
+    # 3. Direct Hardware Inference Loop
+    print("[INFO] Launching pure binary evaluation execution...")
+    for idx, filename in enumerate(filenames, 1):
+        filepath = os.path.join(args.bin_dir, filename)
+        true_label = manifest[filename]["label"]
+
+        # Read the raw flat float32 array straight into memory
+        raw_data = np.fromfile(filepath, dtype=np.float32)
+        
+        # Reshape directly to match the expected network format [Batch=1, Channels=4, Width=512]
+        input_data = raw_data.reshape(1, 4, 512)
+
+        # Dynamic Scaling Check for INT8 vs Float targets
+        if "int8" in str(target_dtype).lower():
+            input_data = np.round(input_data * 127).astype(np.int8)
+        else:
+            input_data = input_data.astype(target_dtype)
+
+        # Execute on hardware using your VART runner footprint
+        logits = model([input_data])[0]
+        
+        # Parse output label index 
+        pred_label = int(np.argmax(logits, axis=1)[0])
+
+        # Track results
+        if pred_label == true_label:
+            correct += 1
+        confusion_matrix[true_label, pred_label] += 1
+
+        # Periodic status updates to the terminal console
+        if idx % 10 == 0 or idx == total_samples:
+            print(f"  -> Processed: {idx:04d}/{total_samples:04d} | Running Accuracy: {(correct / idx) * 100:.2f}%")
+
+    # 4. Render Final Performance Matrix
+    final_accuracy = (correct / total_samples) * 100
+    print("\n" + "="*50)
+    print(f" FINAL HARDWARE ACCURACY: {final_accuracy:.2f}%")
+    print(f" MATCHED SAMPLES:         {correct} / {total_samples}")
+    print("="*50 + "\n")
+
+    print("Distribution Array Matrix (Rows = True Class, Columns = Predicted Class):")
+    print(f"        {modulations[0]:>8} {modulations[1]:>8} {modulations[2]:>8}")
+    for i, mod in enumerate(modulations):
+        print(f"{mod:>7}: {confusion_matrix[i, 0]:8d} {confusion_matrix[i, 1]:8d} {confusion_matrix[i, 2]:8d}")
+    print("")
+
+if __name__ == "__main__":
+    main()
