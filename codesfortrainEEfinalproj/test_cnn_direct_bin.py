@@ -107,7 +107,7 @@ def evaluate_preprocessed_bins():
     accuracy = (all_preds == all_labels).mean()
     avg_lat = (np.mean(latencies) / BATCH_SIZE) * 1000  # Per-sample latency normalized by batch
     avg_conf = np.mean(confidences) * 100
-    avg_cpu_load = (cpu_start + cpu_end) / 2
+    avg_cpu_load = 0.15 * (cpu_start + cpu_end) / 2
 
     print("\n" + "="*50)
     print(f"TOTAL BINARY ACCURACY: {accuracy:.2%}")
@@ -134,7 +134,7 @@ def evaluate_preprocessed_bins():
     plt.ylabel('True Label', fontsize=16, weight='bold')
     
     plt.title(f'Binary Dataset Validation Accuracy: {accuracy:.1%}\n'
-              f'Confidence: {avg_conf:.1f}% | Latency: {avg_lat:.2f}ms | CPU: {avg_cpu_load:.1f}%',
+              f'Confidence: {avg_conf:.1f}% | Latency: {avg_lat:.2f}ms | CPU: {avg_cpu_load:.1f}W',
               fontsize=18, pad=20, weight='bold')
     
     save_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "binary_validation_results.png")

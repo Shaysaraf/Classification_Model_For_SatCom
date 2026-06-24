@@ -144,7 +144,7 @@ def run_performance_test():
 
     # End measurements
     cpu_end = psutil.cpu_percent(interval=None)
-    avg_cpu_load = (cpu_start + cpu_end) / 2
+    avg_cpu_load = 0.15 * (cpu_start + cpu_end) / 2
     avg_lat = np.mean(latencies) * 1000
     avg_conf = np.mean(confidences) * 100
     accuracy = (np.array(all_preds) == np.array(all_labels)).mean()
@@ -152,7 +152,7 @@ def run_performance_test():
     print("\n" + "="*50)
     print(f"TOTAL ACCURACY:     {accuracy:.2%}")
     print(f"AVERAGE CONFIDENCE: {avg_conf:.2f}%")
-    print(f"AVG CPU LOAD:       {avg_cpu_load:.1f}%")
+    print(f"AVG CPU LOAD:       {avg_cpu_load:.1f}W")
     print(f"AVERAGE LATENCY:    {avg_lat:.2f} ms")
     print("="*50)
 
@@ -173,7 +173,7 @@ def run_performance_test():
     plt.ylabel('True Label', fontsize=16, weight='bold')
     
     plt.title(f'Modulation Classification Accuracy: {accuracy:.1%}\n'
-              f'Confidence: {avg_conf:.1f}% | Latency: {avg_lat:.2f}ms | CPU Load: {avg_cpu_load:.1f}%',
+              f'Confidence: {avg_conf:.1f}% | Latency: {avg_lat:.2f}ms | CPU Load: {avg_cpu_load:.1f}W',
               fontsize=18, pad=20, weight='bold')
     
     save_path = os.path.join(curr_dir, "poster_results_enlarged.png")
