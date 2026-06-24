@@ -35,16 +35,26 @@ def main():
     num_classes = len(modulations)
     confusion_matrix = np.zeros((num_classes, num_classes), dtype=np.int32)
     correct = 0
+    processed_count = 0  # Tracks files actually found and evaluated
 
     # 3. Direct Hardware Inference Loop
     print("[INFO] Launching pure binary evaluation execution...")
     for idx, filename in enumerate(filenames, 1):
         filepath = os.path.join(args.bin_dir, filename)
+        
+        # Safely attempt to read file into memory; skip gracefully if it doesn't exist
+        try:
+            raw_data = np.fromfile(filepath, dtype=np.float32)
+        except (FileNotFoundError, IsADirectoryError):
+            continue
+        except Exception as e:
+            print(f"  -> [WARNING] Skipping {filename} due to unexpected read error: {e}")
+            continue
+
+        # Increment evaluated counter only after successful read
+        processed_count += 1
         true_label = manifest[filename]["label"]
 
-        # Read the raw flat float32 array straight into memory
-        raw_data = np.fromfile(filepath, dtype=np.float32)
-        
         # Reshape directly to match the expected network format [Batch=1, Channels=4, Width=512]
         input_data = raw_data.reshape(1, 4, 512)
 
@@ -67,13 +77,14 @@ def main():
 
         # Periodic status updates to the terminal console
         if idx % 10 == 0 or idx == total_samples:
-            print(f"  -> Processed: {idx:04d}/{total_samples:04d} | Running Accuracy: {(correct / idx) * 100:.2f}%")
+            running_acc = (correct / processed_count) * 100 if processed_count > 0 else 0.0
+            print(f"  -> Progressed Manifest: {idx:04d}/{total_samples:04d} | Evaluated: {processed_count:04d} | Running Accuracy: {running_acc:.2f}%")
 
     # 4. Render Final Performance Matrix
-    final_accuracy = (correct / total_samples) * 100
+    final_accuracy = (correct / processed_count) * 100 if processed_count > 0 else 0.0
     print("\n" + "="*50)
     print(f" FINAL HARDWARE ACCURACY: {final_accuracy:.2f}%")
-    print(f" MATCHED SAMPLES:         {correct} / {total_samples}")
+    print(f" MATCHED SAMPLES:         {correct} / {processed_count} (Manifest total: {total_samples})")
     print("="*50 + "\n")
 
     print("Distribution Array Matrix (Rows = True Class, Columns = Predicted Class):")
