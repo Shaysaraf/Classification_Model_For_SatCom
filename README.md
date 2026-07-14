@@ -79,7 +79,7 @@ codesfortrainEEfinalproj/
 │
 │  ├── data_ready_SR.json            # Signal metadata database (modcod, symbol rate, etc.)
 │  ├── class_mapping_SR.json         # Mappings for symbol rate & rolloff indices
-│  │
+│  
 │  ├── best_resnet18_dpu.pth         # Pre-trained ResNet-18 weights (DPU-optimized)
 │  ├── best_resnet_cnn.pth           # Pre-trained ResNet-CNN weights
 │
