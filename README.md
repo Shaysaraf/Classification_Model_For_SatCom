@@ -14,8 +14,7 @@ A deep learning system for automatic modulation classification of satellite comm
 - [How to Run](#how-to-run)
   - [1. Training](#1-training)
   - [2. Testing / Evaluation](#2-testing--evaluation)
-  - [3. SNR Estimation](#3-snr-estimation)
-  - [4. Versal Hardware Deployment](#4-versal-hardware-deployment)
+  - [3. Versal Hardware Deployment](#3-versal-hardware-deployment)
 - [Key Files Reference](#key-files-reference)
 - [Results](#results)
 
