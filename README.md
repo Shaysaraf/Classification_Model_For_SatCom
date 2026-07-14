@@ -138,10 +138,7 @@ export METADATA_FILE=/app/data_ready_SR.json
 
 ### 1. Training
 
-**Train with ResNet-34 (default):**
-```bash
-python modulation_main.py
-```
+
 
 **Train with ResNet-18 (recommended for Versal/DPU export):**
 ```bash
