@@ -66,26 +66,26 @@ All models take input shape `(batch, 4, 512)` and output class logits.
 
 ```
 codesfortrainEEfinalproj/
+├── run_on_pc/
+│  ├── modulation_main.py            # Main training script (ResNet-34 variant)
+│  ├── modulation_main_resnet18.py   # Training script for ResNet-18 (DPU-optimized)
 │
-├── modulation_main.py            # Main training script (ResNet-34 variant)
-├── modulation_main_resnet18.py   # Training script for ResNet-18 (DPU-optimized)
+│  ├── modulation_test_cnn.py        # Model testing & confusion matrix generation
+│  ├── data_manager.py               # SatComDataManager: data loading & saving       
 │
-├── modulation_test_cnn.py        # Model testing & confusion matrix generation
+│  ├── modulation_models/            # Model definitions
+│  │   ├── modulation_model_cnn.py
+│  │   ├── modulation_model_resnet18.py
 │
-├── data_manager.py               # SatComDataManager: data loading & saving       
+│  ├── data_ready_SR.json            # Signal metadata database (modcod, symbol rate, etc.)
+│  ├── class_mapping_SR.json         # Mappings for symbol rate & rolloff indices
+│  │
+│  ├── best_resnet18_dpu.pth         # Pre-trained ResNet-18 weights (DPU-optimized)
+│  ├── best_resnet_cnn.pth           # Pre-trained ResNet-CNN weights
 │
-│
-├── modulation_models/            # Model definitions
-│   ├── modulation_model_cnn.py
-│   ├── modulation_model_resnet18.py
-│  
-│
-├── data_ready_SR.json            # Signal metadata database (modcod, symbol rate, etc.)
-├── class_mapping_SR.json         # Mappings for symbol rate & rolloff indices
-│
-├── best_resnet18_dpu.pth         # Pre-trained ResNet-18 weights (DPU-optimized)
-├── best_resnet_cnn.pth           # Pre-trained ResNet-CNN weights
-│
+├── versal/
+│  ├── my_network_inference.py       # inference .py for VitisAI        
+│  ├── test_for_versal.py            # VART runner code on Versal
 └── README.md
 ```
 
